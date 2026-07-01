@@ -1,0 +1,59 @@
+{
+  "name": "entur-departures",
+  "author": "Peter",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "dependencies": {
+    "@rebble/clay": "^1.0.8"
+  },
+  "pebble": {
+    "displayName": "Entur Departures",
+    "uuid": "8b16cca5-42c3-4df4-ae2d-4029868babb5",
+    "sdkVersion": "3",
+    "enableMultiJS": true,
+    "targetPlatforms": [
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "resources": {
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon.png",
+          "menuIcon": true
+        }
+      ]
+    },
+    "capabilities": [
+      "location",
+      "configurable"
+    ],
+    "messageKeys": [
+      "MSG_TYPE",
+      "COUNT",
+      "PAYLOAD",
+      "JOURNEY_INDEX",
+      "REQUEST",
+      "ET_CLIENT_NAME",
+      "NUM_DEPARTURES",
+      "J1_LABEL",
+      "J1_FROM",
+      "J1_TO",
+      "J2_LABEL",
+      "J2_FROM",
+      "J2_TO",
+      "J3_LABEL",
+      "J3_FROM",
+      "J3_TO",
+      "J4_LABEL",
+      "J4_FROM",
+      "J4_TO"
+    ]
+  }
+}

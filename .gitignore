@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+.lock-waf_*
+
+# JS dependencies (restored by `pebble build`)
+node_modules/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Pebble SDK
+.pebble-sdk/
