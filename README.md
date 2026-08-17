@@ -49,6 +49,24 @@ Watch (C, MenuLayer)  ⇄  AppMessage  ⇄  Phone (PebbleKit JS)  ⇄  Entur API
 - **`src/pkjs/config.js`** — the Clay configuration page (4 journey slots each
   with a big-text toggle, departures-to-show, Entur client name).
 
+### Staying fast
+
+Entur answers a trip query in ~200 ms, so anything slower than that was our own
+doing. Three things keep the board quick:
+
+- **The GPS is never on the critical path.** The last fix is persisted and used
+  immediately; a refresh runs in the background. Deciding which of two stops is
+  nearer tolerates a fix that is minutes old and hundreds of metres off, and
+  waiting for a fresh one used to cost up to 15 s per open.
+- **Boards are prefetched at launch.** Phone-side JS only runs while the app is
+  in the foreground, so opening the app is exactly the moment to warm every
+  journey's board. Departure times are cached as ISO timestamps and re-rendered
+  on send, so a cached board shows correct countdowns rather than stale ones.
+- **Every request has a watchdog.** The phone can go quiet for reasons the watch
+  cannot see — JS not up yet, a busy outbox, a geolocation callback that fires
+  neither success nor error. Requests are retried up to 3 times, 5 s apart, and
+  then fail to a `SELECT to retry` row instead of spinning forever.
+
 ### Entur APIs
 
 Open under [NLOD](https://data.norge.no/nlod/en/2.0) — **no API key**. The only

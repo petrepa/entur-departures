@@ -16,7 +16,7 @@
  *   0 = menu       : PAYLOAD = journeys, one per line "label\tdirection\tbig"
  *                    big = "1" when that journey should use the large,
  *                    glanceable departure board (readable while cycling).
- *   1 = departures : JOURNEY_INDEX + PAYLOAD = "header\nHH:MM\tLINE\tETA\n..."
+ *   1 = departures : JOURNEY_INDEX + PAYLOAD = "header\nHH:MM\tLINE\tETA\tTRACK\n..."
  *   2 = error      : JOURNEY_INDEX + PAYLOAD = message
  * Protocol (watch -> phone), keyed by REQUEST:
  *   1 = send menu
@@ -58,6 +58,14 @@
 // "no request" on the phone side.
 #define REQ_MENU        1
 #define REQ_DEPARTURES  2
+
+// A request can go unanswered for reasons the watch cannot see: the phone-side
+// JS may not be up yet, the outbox may be busy, or a geolocation callback may
+// never fire. Without a watchdog that leaves the board spinning forever with no
+// way out except force-quitting the app, so every request is retried and then
+// surfaced as something the user can act on.
+#define REQ_TIMEOUT_MS  5000
+#define REQ_MAX_TRIES   3
 
 // ============================================================================
 // GLOBAL STATE
@@ -197,19 +205,59 @@ static void parse_departures(const char *payload) {
 // APPMESSAGE
 // ============================================================================
 
+static AppTimer *s_menu_timer;
+static AppTimer *s_dep_timer;
+static int       s_menu_tries;
+static int       s_dep_tries;
+
+static void menu_timeout(void *data);
+static void dep_timeout(void *data);
+
 static void request_menu(void) {
     DictionaryIterator *iter;
-    if (app_message_outbox_begin(&iter) != APP_MSG_OK) return;
-    dict_write_uint8(iter, MESSAGE_KEY_REQUEST, REQ_MENU);
-    app_message_outbox_send();
+    if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
+        dict_write_uint8(iter, MESSAGE_KEY_REQUEST, REQ_MENU);
+        app_message_outbox_send();
+    }
+    // Armed even when the send failed — a busy outbox is exactly the case that
+    // needs retrying.
+    if (s_menu_timer) app_timer_cancel(s_menu_timer);
+    s_menu_timer = app_timer_register(REQ_TIMEOUT_MS, menu_timeout, NULL);
 }
 
 static void request_departures(int index) {
     DictionaryIterator *iter;
-    if (app_message_outbox_begin(&iter) != APP_MSG_OK) return;
-    dict_write_uint8(iter, MESSAGE_KEY_REQUEST, REQ_DEPARTURES);
-    dict_write_int32(iter, MESSAGE_KEY_JOURNEY_INDEX, index);
-    app_message_outbox_send();
+    if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
+        dict_write_uint8(iter, MESSAGE_KEY_REQUEST, REQ_DEPARTURES);
+        dict_write_int32(iter, MESSAGE_KEY_JOURNEY_INDEX, index);
+        app_message_outbox_send();
+    }
+    if (s_dep_timer) app_timer_cancel(s_dep_timer);
+    s_dep_timer = app_timer_register(REQ_TIMEOUT_MS, dep_timeout, NULL);
+}
+
+static void menu_timeout(void *data) {
+    s_menu_timer = NULL;
+    if (!s_menu_loading) return;              // already answered
+    if (++s_menu_tries < REQ_MAX_TRIES) { request_menu(); return; }
+    // Give up quietly: a persisted list is already on screen, and if there
+    // isn't one the empty-state row explains what to do.
+    s_menu_loading = false;
+    if (s_main_menu) menu_layer_reload_data(s_main_menu);
+}
+
+static void dep_timeout(void *data) {
+    s_dep_timer = NULL;
+    if (s_detail_index < 0 || !s_detail_loading) return;
+    if (++s_dep_tries < REQ_MAX_TRIES) {
+        request_departures(s_detail_index);   // re-arms the timer
+        return;
+    }
+    s_detail_loading = false;
+    if (s_dep_count == 0 && !s_dep_error[0]) {
+        snprintf(s_dep_error, sizeof(s_dep_error), "Phone didn't answer");
+    }
+    if (s_detail_menu) menu_layer_reload_data(s_detail_menu);
 }
 
 static void inbox_received_callback(DictionaryIterator *iter, void *context) {
@@ -219,6 +267,7 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
     Tuple *payload_t = dict_find(iter, MESSAGE_KEY_PAYLOAD);
 
     if (type == 0) {                    // menu
+        if (s_menu_timer) { app_timer_cancel(s_menu_timer); s_menu_timer = NULL; }
         if (payload_t) {
             parse_menu(payload_t->value->cstring);
             persist_write_string(PERSIST_KEY_MENU, payload_t->value->cstring);
@@ -233,6 +282,8 @@ static void inbox_received_callback(DictionaryIterator *iter, void *context) {
     Tuple *idx_t = dict_find(iter, MESSAGE_KEY_JOURNEY_INDEX);
     int idx = idx_t ? (int)idx_t->value->int32 : -1;
     if (idx != s_detail_index) return;
+
+    if (s_dep_timer) { app_timer_cancel(s_dep_timer); s_dep_timer = NULL; }
 
     if (type == 1) {                    // departures
         if (payload_t) parse_departures(payload_t->value->cstring);
@@ -325,7 +376,7 @@ static void detail_draw_row(GContext *ctx, const Layer *cell,
         return;
     }
     if (s_dep_error[0]) {
-        menu_cell_basic_draw(ctx, cell, "No data", s_dep_error, NULL);
+        menu_cell_basic_draw(ctx, cell, s_dep_error, "SELECT to retry", NULL);
         return;
     }
     if (s_dep_count == 0) {
@@ -342,7 +393,9 @@ static void detail_draw_row(GContext *ctx, const Layer *cell,
 }
 
 static void detail_select(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
-    // SELECT refreshes the board.
+    // SELECT refreshes the board — and is the way out of a failed load.
+    s_dep_tries      = 0;
+    s_dep_error[0]   = '\0';
     s_detail_loading = true;
     if (s_detail_menu) menu_layer_reload_data(s_detail_menu);
     request_departures(s_detail_index);
@@ -373,6 +426,7 @@ static void detail_window_load(Window *window) {
 }
 
 static void detail_window_unload(Window *window) {
+    if (s_dep_timer) { app_timer_cancel(s_dep_timer); s_dep_timer = NULL; }
     menu_layer_destroy(s_detail_menu);
     status_bar_layer_destroy(s_detail_status_bar);
     window_destroy(window);
@@ -383,6 +437,7 @@ static void detail_window_unload(Window *window) {
 
 static void open_detail(int index) {
     s_detail_index   = index;
+    s_dep_tries      = 0;
     s_detail_loading = true;
     s_dep_count      = 0;
     s_dep_error[0]   = '\0';
@@ -435,7 +490,10 @@ static void main_draw_row(GContext *ctx, const Layer *cell,
 
 static void main_select(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
     if (s_journey_count == 0) {
+        s_menu_tries   = 0;
+        s_menu_loading = true;
         request_menu();       // retry fetching the config
+        menu_layer_reload_data(menu);
         return;
     }
     open_detail(cell_index->row);
