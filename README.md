@@ -16,8 +16,10 @@ Built for **Pebble Time 2 (emery)**.
 - **Automatic direction** — the phone's location picks the nearer stop as the
   origin, so you always see departures the way you're actually travelling.
 - **Live departures** with realtime-adjusted times and a minutes-until countdown.
-- **Track / platform** for each departure (`Spor 3` for trains/metro, `Pl. 3`
-  for bus/tram).
+- **Boarding and arrival track** for each departure — `Spor 3 > 18` means board
+  at track 3 and arrive at track 18 (`Pl.` instead of `Spor` for bus/tram). Seeing
+  the arrival track is what lets you pick between two trains leaving at nearly
+  the same time when some platforms are easier to reach than others.
 - **Phone-configurable** via a Clay settings page — no rebuild to change journeys.
 
 ## How it works

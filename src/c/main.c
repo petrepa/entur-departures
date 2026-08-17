@@ -38,7 +38,7 @@
 #define TIME_LEN     8
 #define LINE_LEN    12
 #define ETA_LEN     16
-#define TRACK_LEN   16
+#define TRACK_LEN   24   // "Spor 3 > 18" (boarding track > arrival track)
 #define SUB_LEN     (ETA_LEN + TRACK_LEN + 6)
 #define ERR_LEN     64
 

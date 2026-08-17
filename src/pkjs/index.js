@@ -109,6 +109,10 @@ function getLocation(cb) {
   );
 }
 
+function quayCode(place) {
+  return (place && place.quay && place.quay.publicCode) || '';
+}
+
 // Origin = nearer stop; destination = the other. Falls back to A->B if no fix.
 function pickDirection(journey, loc) {
   if (loc) {
@@ -272,7 +276,7 @@ function sendDepartures(index) {
         '{trip(from:{place:"' + d.origin.id + '"} to:{place:"' + d.dest.id +
         '"} numTripPatterns:' + numDepartures + '){tripPatterns{' +
         'expectedStartTime legs{mode expectedStartTime line{publicCode} ' +
-        'fromPlace{quay{publicCode}}}}}}';
+        'fromPlace{quay{publicCode}} toPlace{quay{publicCode}}}}}}';
       graphQL(q, function (data) {
         var patterns = data && data.trip && data.trip.tripPatterns;
         var header = shortName(d.origin.name) + ' → ' + shortName(d.dest.name);
@@ -282,20 +286,26 @@ function sendDepartures(index) {
         }
         var lines = [header];
         patterns.forEach(function (p) {
-          // First non-walking leg carries the real departure + line.
-          var leg = null;
+          // First non-walking leg carries the real departure + line; the last
+          // one carries the arrival platform at the destination.
+          var leg = null, lastLeg = null;
           for (var k = 0; k < p.legs.length; k++) {
-            if (p.legs[k].mode !== 'foot') { leg = p.legs[k]; break; }
+            if (p.legs[k].mode === 'foot') continue;
+            if (!leg) leg = p.legs[k];
+            lastLeg = p.legs[k];
           }
           var iso = (leg && leg.expectedStartTime) || p.expectedStartTime;
           var code = (leg && leg.line && leg.line.publicCode) || '';
+
           // Boarding track/platform = the quay of the first non-walking leg.
-          var track = '';
-          if (leg && leg.fromPlace && leg.fromPlace.quay &&
-              leg.fromPlace.quay.publicCode) {
-            var railish = (leg.mode === 'rail' || leg.mode === 'metro');
-            track = (railish ? 'Spor ' : 'Pl. ') + leg.fromPlace.quay.publicCode;
-          }
+          var depQuay = leg ? quayCode(leg.fromPlace) : '';
+          var arrQuay = lastLeg ? quayCode(lastLeg.toPlace) : '';
+          var railish = leg && (leg.mode === 'rail' || leg.mode === 'metro');
+          // "Spor 3 > 18": board at 3, arrive at 18. Knowing the arrival
+          // platform is what lets you prefer one train over another.
+          var track = depQuay ? (railish ? 'Spor ' : 'Pl. ') + depQuay : '';
+          if (arrQuay) track = track ? track + ' > ' + arrQuay : 'Ank. ' + arrQuay;
+
           lines.push(isoLocalHHMM(iso) + '\t' + code + '\t' + etaText(iso) +
                      '\t' + track);
         });
