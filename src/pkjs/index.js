@@ -28,13 +28,16 @@ var DEFAULT_CLIENT = 'peter-pebble-departures';
 
 // Seed journey (used until the user configures their own in phone settings).
 var DEFAULT_JOURNEYS = [
-  { label: 'Oslo–Ski', from: 'Oslo S', to: 'Ski' }
+  { label: 'Oslo–Ski', from: 'Oslo S', to: 'Ski', big: false }
 ];
 
 var etClientName = DEFAULT_CLIENT;
 var numDepartures = 5;
 
-// Resolved journeys: [{ label, a:{id,name,lat,lon}, b:{id,name,lat,lon} }]
+// Resolved journeys:
+//   [{ label, big, a:{id,name,lat,lon}, b:{id,name,lat,lon} }]
+// `big` asks the watch for the large, glanceable board — readable while cycling,
+// at the cost of fitting fewer departures on screen.
 var resolved = null;
 
 // Cached GPS fix.
@@ -170,7 +173,12 @@ function resolveJourneys(raw, done) {
       if (eA) { console.log('resolve A failed: ' + eA); next(); return; }
       resolvePlace(j.to, function (eB, b) {
         if (eB) { console.log('resolve B failed: ' + eB); next(); return; }
-        out.push({ label: j.label || (a.name + '–' + b.name), a: a, b: b });
+        out.push({
+          label: j.label || (a.name + '–' + b.name),
+          big: !!j.big,
+          a: a,
+          b: b
+        });
         next();
       });
     });
@@ -254,7 +262,8 @@ function sendMenu() {
       var rows = resolved.map(function (j) {
         var d = pickDirection(j, loc);
         var arrow = d.known ? '→ ' : '⇄ ';
-        return j.label + '\t' + arrow + shortName(d.dest.name);
+        return j.label + '\t' + arrow + shortName(d.dest.name) +
+               '\t' + (j.big ? '1' : '0');
       });
       sendToWatch({
         MSG_TYPE: 0,
@@ -325,6 +334,13 @@ function sendDepartures(index) {
 // Clay settings -> raw journeys
 // ---------------------------------------------------------------------------
 
+// Clay toggles arrive as true/false (or "true"/"false" once round-tripped).
+function boolVal(settings, key) {
+  var v = settings[key];
+  if (v && typeof v === 'object' && 'value' in v) v = v.value;
+  return v === true || v === 'true' || v === 1 || v === '1';
+}
+
 function val(settings, key) {
   var v = settings[key];
   if (v && typeof v === 'object' && 'value' in v) v = v.value;
@@ -342,7 +358,8 @@ function applySettings(settings) {
     raw.push({
       label: val(settings, 'J' + i + '_LABEL'),
       from:  val(settings, 'J' + i + '_FROM'),
-      to:    val(settings, 'J' + i + '_TO')
+      to:    val(settings, 'J' + i + '_TO'),
+      big:   boolVal(settings, 'J' + i + '_BIG')
     });
   }
   return raw;

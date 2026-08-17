@@ -20,6 +20,11 @@ Built for **Pebble Time 2 (emery)**.
   at track 3 and arrive at track 18 (`Pl.` instead of `Spor` for bus/tram). Seeing
   the arrival track is what lets you pick between two trains leaving at nearly
   the same time when some platforms are easier to reach than others.
+- **Big text mode, per journey** — a toggle in the phone settings switches that
+  journey's board to a large, glanceable layout: countdown in 42px, track in
+  bold underneath, clock and line code small below. About two departures fit on
+  screen instead of three. Set it on the journeys you ride a bike to and leave it
+  off for the ones where you can stop and read properly.
 - **Phone-configurable** via a Clay settings page — no rebuild to change journeys.
 
 ## How it works
@@ -35,13 +40,14 @@ Watch (C, MenuLayer)  ⇄  AppMessage  ⇄  Phone (PebbleKit JS)  ⇄  Entur API
 ```
 
 - **`src/c/main.c`** — two windows: a `MenuLayer` of journeys and a departure
-  board. Parses compact strings from the phone; persists the last list for an
+  board, the latter drawn either with the default cell or a custom large-text
+  cell. Parses compact strings from the phone; persists the last list for an
   instant cold-launch.
 - **`src/pkjs/index.js`** — reads Clay settings, geocodes stop names to
   `NSR:StopPlace` ids (cached in `localStorage`), gets GPS, picks direction by
   haversine distance, and queries the Entur JourneyPlanner v3 `trip` endpoint.
-- **`src/pkjs/config.js`** — the Clay configuration page (4 journey slots,
-  departures-to-show, Entur client name).
+- **`src/pkjs/config.js`** — the Clay configuration page (4 journey slots each
+  with a big-text toggle, departures-to-show, Entur client name).
 
 ### Entur APIs
 
@@ -74,6 +80,8 @@ Open the Pebble phone app → **Entur Departures** → settings (gear), then fil
 up to four journeys. Type a stop **name** (e.g. `Oslo S`, `Nydalen`) — it's
 geocoded on save — or paste an exact `NSR:StopPlace:XXXXX` id if a name is
 ambiguous. Ships with a default **Oslo–Ski** journey so it works out of the box.
+
+Each journey has its own **Big text** toggle for the glanceable board.
 
 ## Navigation
 

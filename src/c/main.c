@@ -13,7 +13,9 @@
  *   Detail (MenuLayer) : departure board for the selected journey.
  *
  * Protocol (phone -> watch), keyed by MSG_TYPE:
- *   0 = menu       : PAYLOAD = journeys, one per line "label\tdirection"
+ *   0 = menu       : PAYLOAD = journeys, one per line "label\tdirection\tbig"
+ *                    big = "1" when that journey should use the large,
+ *                    glanceable departure board (readable while cycling).
  *   1 = departures : JOURNEY_INDEX + PAYLOAD = "header\nHH:MM\tLINE\tETA\n..."
  *   2 = error      : JOURNEY_INDEX + PAYLOAD = message
  * Protocol (watch -> phone), keyed by REQUEST:
@@ -44,6 +46,12 @@
 
 #define PAYLOAD_BUFFER_SIZE 512
 
+// Big-mode row height: trades rows-on-screen for text readable at a glance.
+// Normal mode registers no height callback at all, so it keeps the platform
+// default rather than a hardcoded guess at it.
+#define BIG_CELL_H          88
+#define PLACEHOLDER_CELL_H  60   // loading / error / empty rows, plain text
+
 #define PERSIST_KEY_MENU 1
 
 // AppMessage request codes (watch -> phone). Non-zero so a 0 never reads as
@@ -58,12 +66,15 @@
 // --- Journeys (main menu) ---
 static char s_journey_label[MAX_JOURNEYS][LABEL_LEN];
 static char s_journey_dir[MAX_JOURNEYS][DIR_LEN];
+static bool s_journey_big[MAX_JOURNEYS];   // large-text board for this journey
 static int  s_journey_count = 0;
 static bool s_menu_loading  = true;
 
 // --- Departures (detail) ---
 static char s_dep_time[MAX_DEPARTURES][TIME_LEN];
 static char s_dep_line[MAX_DEPARTURES][LINE_LEN];
+static char s_dep_eta[MAX_DEPARTURES][ETA_LEN];                 // "6 min"
+static char s_dep_track[MAX_DEPARTURES][TRACK_LEN];             // "Spor 3 > 18"
 static char s_dep_row[MAX_DEPARTURES][TIME_LEN + LINE_LEN + 4]; // "HH:MM  R11"
 static char s_dep_sub[MAX_DEPARTURES][SUB_LEN];                 // "6 min · Spor 3"
 static int  s_dep_count = 0;
@@ -94,23 +105,39 @@ static void copy_field(char *dst, int dstsize, const char *src, int len) {
     dst[n] = '\0';
 }
 
+// Split a '\t'-separated line into at most `max` fields; returns the count.
+static int split_fields(const char *line, int line_len, const char **fs, int *fl,
+                        int max) {
+    int nf = 0;
+    const char *f = line; int rem = line_len;
+    while (nf < max) {
+        const char *t = memchr(f, '\t', rem);
+        int l = t ? (int)(t - f) : rem;
+        fs[nf] = f; fl[nf] = l; nf++;
+        if (!t) break;
+        rem -= l + 1; f = t + 1;
+    }
+    return nf;
+}
+
 // Menu payload: one journey per '\n' line, fields split by '\t':
-//   "Oslo–Ski\t→ Ski"
+//   "Oslo–Ski\t→ Ski\t1"
 static void parse_menu(const char *payload) {
     s_journey_count = 0;
     const char *p = payload;
     while (*p && s_journey_count < MAX_JOURNEYS) {
         const char *nl = strchr(p, '\n');
         int line_len = nl ? (int)(nl - p) : (int)strlen(p);
-        const char *tab = memchr(p, '\t', line_len);
-        int lab_len = tab ? (int)(tab - p) : line_len;
+
+        const char *fs[3]; int fl[3];
+        int nf = split_fields(p, line_len, fs, fl, 3);
+
         int i = s_journey_count;
-        copy_field(s_journey_label[i], LABEL_LEN, p, lab_len);
-        if (tab) {
-            copy_field(s_journey_dir[i], DIR_LEN, tab + 1, line_len - lab_len - 1);
-        } else {
-            s_journey_dir[i][0] = '\0';
-        }
+        copy_field(s_journey_label[i], LABEL_LEN, fs[0], fl[0]);
+        if (nf > 1) copy_field(s_journey_dir[i], DIR_LEN, fs[1], fl[1]);
+        else        s_journey_dir[i][0] = '\0';
+        s_journey_big[i] = (nf > 2 && fl[2] > 0 && fs[2][0] == '1');
+
         s_journey_count++;
         if (!nl) break;
         p = nl + 1;
@@ -135,24 +162,17 @@ static void parse_departures(const char *payload) {
 
         // Split the row into up to 4 tab-separated fields:
         //   time \t line \t eta \t track
-        const char *fs[4]; int fl[4]; int nf = 0;
-        const char *f = p; int rem = line_len;
-        while (nf < 4) {
-            const char *t = memchr(f, '\t', rem);
-            int l = t ? (int)(t - f) : rem;
-            fs[nf] = f; fl[nf] = l; nf++;
-            if (!t) break;
-            rem -= l + 1; f = t + 1;
-        }
+        const char *fs[4]; int fl[4];
+        int nf = split_fields(p, line_len, fs, fl, 4);
 
         int i = s_dep_count;
         copy_field(s_dep_time[i], TIME_LEN, fs[0], fl[0]);
-        s_dep_line[i][0] = '\0';
-        char eta[ETA_LEN]   = "";
-        char track[TRACK_LEN] = "";
-        if (nf > 1) copy_field(s_dep_line[i], LINE_LEN, fs[1], fl[1]);
-        if (nf > 2) copy_field(eta,   ETA_LEN,   fs[2], fl[2]);
-        if (nf > 3) copy_field(track, TRACK_LEN, fs[3], fl[3]);
+        s_dep_line[i][0]  = '\0';
+        s_dep_eta[i][0]   = '\0';
+        s_dep_track[i][0] = '\0';
+        if (nf > 1) copy_field(s_dep_line[i],  LINE_LEN,  fs[1], fl[1]);
+        if (nf > 2) copy_field(s_dep_eta[i],   ETA_LEN,   fs[2], fl[2]);
+        if (nf > 3) copy_field(s_dep_track[i], TRACK_LEN, fs[3], fl[3]);
 
         // Precompute title + subtitle so the draw callback stays cheap.
         if (s_dep_line[i][0]) {
@@ -161,10 +181,11 @@ static void parse_departures(const char *payload) {
         } else {
             snprintf(s_dep_row[i], sizeof(s_dep_row[i]), "%s", s_dep_time[i]);
         }
-        if (track[0]) {
-            snprintf(s_dep_sub[i], sizeof(s_dep_sub[i]), "%s · %s", eta, track);
+        if (s_dep_track[i][0]) {
+            snprintf(s_dep_sub[i], sizeof(s_dep_sub[i]), "%s · %s",
+                     s_dep_eta[i], s_dep_track[i]);
         } else {
-            snprintf(s_dep_sub[i], sizeof(s_dep_sub[i]), "%s", eta);
+            snprintf(s_dep_sub[i], sizeof(s_dep_sub[i]), "%s", s_dep_eta[i]);
         }
         s_dep_count++;
         if (!nl) break;
@@ -243,6 +264,44 @@ static void outbox_failed_callback(DictionaryIterator *iter,
 // number of rows to draw when there are no real departures (loading/error/empty)
 static int detail_placeholder_rows(void) { return 1; }
 
+// Does the journey currently on screen want the large, glanceable board?
+static bool detail_is_big(void) {
+    return s_detail_index >= 0 && s_detail_index < MAX_JOURNEYS &&
+           s_journey_big[s_detail_index];
+}
+
+// Only registered for big-mode journeys (see detail_window_load).
+static int16_t detail_cell_height(MenuLayer *menu, MenuIndex *cell_index, void *c) {
+    if (s_detail_loading || s_dep_error[0] || s_dep_count == 0) {
+        return PLACEHOLDER_CELL_H;
+    }
+    return BIG_CELL_H;
+}
+
+// Large layout: the countdown fills the row, the track sits under it in bold,
+// and the clock time + line code drop to a small third line. Everything you
+// need to decide at a glance is in the top two lines.
+static void detail_draw_big_row(GContext *ctx, const Layer *cell, int i) {
+    GRect b = layer_get_bounds(cell);
+    graphics_context_set_text_color(ctx,
+        menu_cell_layer_is_highlighted(cell) ? GColorWhite : GColorBlack);
+
+    graphics_draw_text(ctx, s_dep_eta[i],
+        fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
+        GRect(4, b.origin.y - 8, b.size.w - 8, 46),
+        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+    graphics_draw_text(ctx, s_dep_track[i],
+        fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
+        GRect(4, b.origin.y + 34, b.size.w - 8, 32),
+        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+    graphics_draw_text(ctx, s_dep_row[i],
+        fonts_get_system_font(FONT_KEY_GOTHIC_18),
+        GRect(4, b.origin.y + 62, b.size.w - 8, 22),
+        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+}
+
 static uint16_t detail_num_rows(MenuLayer *menu, uint16_t section, void *ctx) {
     if (s_detail_loading || s_dep_error[0] || s_dep_count == 0) {
         return detail_placeholder_rows();
@@ -275,6 +334,10 @@ static void detail_draw_row(GContext *ctx, const Layer *cell,
         return;
     }
     int i = cell_index->row;
+    if (detail_is_big()) {
+        detail_draw_big_row(ctx, cell, i);
+        return;
+    }
     menu_cell_basic_draw(ctx, cell, s_dep_row[i], s_dep_sub[i], NULL);
 }
 
@@ -295,13 +358,16 @@ static void detail_window_load(Window *window) {
     GRect mbounds = GRect(0, STATUS_BAR_LAYER_HEIGHT, bounds.size.w,
                           bounds.size.h - STATUS_BAR_LAYER_HEIGHT);
     s_detail_menu = menu_layer_create(mbounds);
-    menu_layer_set_callbacks(s_detail_menu, NULL, (MenuLayerCallbacks) {
+    MenuLayerCallbacks cbs = (MenuLayerCallbacks) {
         .get_num_rows       = detail_num_rows,
         .get_header_height  = detail_header_height,
         .draw_header        = detail_draw_header,
         .draw_row           = detail_draw_row,
         .select_click       = detail_select,
-    });
+    };
+    // Left NULL in normal mode so the platform's own cell height is used.
+    if (detail_is_big()) cbs.get_cell_height = detail_cell_height;
+    menu_layer_set_callbacks(s_detail_menu, NULL, cbs);
     menu_layer_set_click_config_onto_window(s_detail_menu, window);
     layer_add_child(root, menu_layer_get_layer(s_detail_menu));
 }

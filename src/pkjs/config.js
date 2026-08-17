@@ -29,6 +29,14 @@ function journeySection(n) {
         "messageKey": "J" + n + "_TO",
         "label": "Stop B",
         "attributes": { "placeholder": "Ski", "limit": 60 }
+      },
+      {
+        "type": "toggle",
+        "messageKey": "J" + n + "_BIG",
+        "label": "Big text",
+        "description": "Large, glanceable departures — readable while cycling. " +
+          "Fewer fit on screen at once.",
+        "defaultValue": false
       }
     ]
   };
