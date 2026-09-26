@@ -23,6 +23,12 @@
  * Protocol (watch -> phone), keyed by REQUEST:
  *   1 = send menu
  *   2 = send departures for JOURNEY_INDEX
+ *   3 = refresh: brand-new GPS fix, then resend the menu and, when
+ *       JOURNEY_INDEX is >= 0, that journey's board fetched from scratch
+ *   4 = reload the board for JOURNEY_INDEX, skipping the phone's cache
+ *
+ * Buttons: SELECT on a board reloads it (4); long-press SELECT anywhere also
+ * forces a new GPS fix (3).
  *
  * Target: emery (200x228). All layout via layer_get_bounds().
  */
@@ -60,6 +66,8 @@
 // "no request" on the phone side.
 #define REQ_MENU        1
 #define REQ_DEPARTURES  2
+#define REQ_REFRESH     3
+#define REQ_RELOAD      4
 
 // A request can go unanswered for reasons the watch cannot see: the phone-side
 // JS may not be up yet, the outbox may be busy, or a geolocation callback may
@@ -238,6 +246,25 @@ static void request_departures(int index) {
     }
     if (s_dep_timer) app_timer_cancel(s_dep_timer);
     s_dep_timer = app_timer_register(REQ_TIMEOUT_MS, dep_timeout, NULL);
+}
+
+// Ask for fresh data: REQ_REFRESH also forces a new GPS fix, REQ_RELOAD only
+// bypasses the phone's cached board. `index` is the open board, or -1 from the
+// journeys list. A retry after a timeout falls back to a plain request.
+static void request_refresh(int index, uint8_t kind) {
+    DictionaryIterator *iter;
+    if (app_message_outbox_begin(&iter) == APP_MSG_OK) {
+        dict_write_uint8(iter, MESSAGE_KEY_REQUEST, kind);
+        dict_write_int32(iter, MESSAGE_KEY_JOURNEY_INDEX, index);
+        app_message_outbox_send();
+    }
+    if (index >= 0) {
+        if (s_dep_timer) app_timer_cancel(s_dep_timer);
+        s_dep_timer = app_timer_register(REQ_TIMEOUT_MS, dep_timeout, NULL);
+    } else {
+        if (s_menu_timer) app_timer_cancel(s_menu_timer);
+        s_menu_timer = app_timer_register(REQ_TIMEOUT_MS, menu_timeout, NULL);
+    }
 }
 
 static void menu_timeout(void *data) {
@@ -440,13 +467,23 @@ static void detail_draw_row(GContext *ctx, const Layer *cell,
     }
 }
 
-static void detail_select(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
-    // SELECT refreshes the board — and is the way out of a failed load.
+static void detail_refresh(uint8_t kind) {
     s_dep_tries      = 0;
     s_dep_error[0]   = '\0';
     s_detail_loading = true;
     if (s_detail_menu) menu_layer_reload_data(s_detail_menu);
-    request_departures(s_detail_index);
+    request_refresh(s_detail_index, kind);
+}
+
+// SELECT reloads the board — and is the way out of a failed load.
+static void detail_select(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
+    detail_refresh(REQ_RELOAD);
+}
+
+// Long-press SELECT also forces a new GPS fix, in case the direction is wrong.
+static void detail_select_long(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
+    vibes_short_pulse();
+    detail_refresh(REQ_REFRESH);
 }
 
 static void detail_window_load(Window *window) {
@@ -465,6 +502,7 @@ static void detail_window_load(Window *window) {
         .draw_header        = detail_draw_header,
         .draw_row           = detail_draw_row,
         .select_click       = detail_select,
+        .select_long_click  = detail_select_long,
     };
     // Left NULL in normal mode so the platform's own cell height is used.
     if (detail_is_big()) cbs.get_cell_height = detail_cell_height;
@@ -517,7 +555,8 @@ static int16_t main_header_height(MenuLayer *menu, uint16_t section, void *ctx) 
 }
 
 static void main_draw_header(GContext *ctx, const Layer *cell, uint16_t section, void *c) {
-    menu_cell_basic_header_draw(ctx, cell, "Journeys");
+    menu_cell_basic_header_draw(ctx, cell,
+        (s_menu_loading && s_journey_count > 0) ? "Updating…" : "Journeys");
 }
 
 static void main_draw_row(GContext *ctx, const Layer *cell,
@@ -547,6 +586,15 @@ static void main_select(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
     open_detail(cell_index->row);
 }
 
+// Long-press SELECT: new GPS fix, then a fresh list with corrected directions.
+static void main_select_long(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
+    vibes_short_pulse();
+    s_menu_tries   = 0;
+    s_menu_loading = true;
+    menu_layer_reload_data(menu);
+    request_refresh(-1, REQ_REFRESH);
+}
+
 static void main_window_load(Window *window) {
     Layer *root = window_get_root_layer(window);
     GRect bounds = layer_get_bounds(root);
@@ -563,6 +611,7 @@ static void main_window_load(Window *window) {
         .draw_header       = main_draw_header,
         .draw_row          = main_draw_row,
         .select_click      = main_select,
+        .select_long_click = main_select_long,
     });
     menu_layer_set_click_config_onto_window(s_main_menu, window);
     layer_add_child(root, menu_layer_get_layer(s_main_menu));
