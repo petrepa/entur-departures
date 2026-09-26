@@ -68,7 +68,7 @@ entur, train, tog, departures, avganger, ruter, vy, norway, norge, oslo, public 
 
 | Field | Value |
 |-------|-------|
-| Source URL | https://github.com/petrepa/entur-departures (**the repo is private**, so make it public or leave this empty) |
+| Source URL | https://github.com/petrepa/entur-departures (public; not yet set on the store, add it in the dashboard) |
 | Website | The same repo URL, or empty |
 | Support email | Defaults to the developer account's email |
 
@@ -117,7 +117,7 @@ Screenshot filenames must start with `<platform>_`; the tool reads the platform 
 - [ ] Set a unique `ET-Client-Name` for the public build. Entur asks for
       `<company>-<app>`, and the current default `peter-pebble-departures` is
       acceptable.
-- [ ] Make the repo public, or drop the source URL.
+- [x] Make the repo public.
 - [ ] Consider changing `author` in `package.json` (currently "Peter"). It is
       shown as the developer name.
 - [ ] Test the Clay settings page on a real phone.
