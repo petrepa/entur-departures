@@ -49,13 +49,27 @@ var bikeLines = parseBikeLines(DEFAULT_BIKE_LINES);
 // bike-friendly trains with a bike symbol.
 var resolved = null;
 
-// Cached GPS fix. Persisted, because deciding which of two stops is nearer
-// tolerates a fix that is old and coarse — and waiting for a fresh one is by
-// far the slowest thing this app ever does.
+// Cached GPS fix, persisted with the time it was taken. Deciding which of two
+// stops is nearer tolerates a coarse fix, but not one from the other end of the
+// journey: the saved fix is usually from the last time the app was open, which
+// may well have been at the other stop.
 var lastLoc = null;
 var lastLocTs = 0;
 var LOC_TIMEOUT = 6000;
+// A fix younger than this is trusted as-is.
+var LOC_FRESH_MS = 5 * 60 * 1000;
+// A fix younger than this isn't worth asking the phone to replace.
+var LOC_REUSE_MS = 30 * 1000;
+// With only an older fix, opening a board waits this long for a fresh one
+// before falling back to the old guess. A later fix still corrects the board.
+var LOC_WAIT_MS = 3000;
 var locPending = false;
+var locWaiters = [];      // callbacks waiting on the fix in progress
+var locForceQueued = false;
+
+// What the watch is showing, so a direction change can be pushed to it.
+var openIndex = -1;       // journey whose board was last requested
+var sentMenuDirs = null;  // origin id per journey in the last menu sent
 
 // Departure boards, keyed by journey index, kept as raw times so a cached entry
 // can be re-rendered with correct "x min" countdowns instead of going stale.
@@ -131,11 +145,21 @@ function distance(lat1, lon1, lat2, lon2) {
   return 6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Ask the phone for a fresh fix, updating the cache. `cb` is optional and is
-// guaranteed to run exactly once — getCurrentPosition has been known to invoke
-// neither of its callbacks, which would otherwise hang the whole request.
-function refreshLocation(cb) {
-  if (locPending && !cb) return;
+// Ask the phone for a fresh fix, updating the cache. `cb` is optional and runs
+// exactly once, with the best fix we have (possibly the old one) — even if
+// getCurrentPosition invokes neither of its callbacks. `force` asks for a
+// brand-new, high-accuracy fix rather than one the phone has cached.
+function refreshLocation(cb, force) {
+  // Menu, boards and prefetch all ask at once on launch; one fix serves them.
+  if (!force && !locPending && lastLoc && (Date.now() - lastLocTs) < LOC_REUSE_MS) {
+    if (cb) cb(lastLoc);
+    return;
+  }
+  if (cb) locWaiters.push(cb);
+  if (locPending) {
+    if (force) locForceQueued = true;
+    return;
+  }
   locPending = true;
   var done = false;
   function finish(loc) {
@@ -145,9 +169,19 @@ function refreshLocation(cb) {
     if (loc) {
       lastLoc = loc;
       lastLocTs = Date.now();
-      try { localStorage.setItem('lastLoc', JSON.stringify(loc)); } catch (e) {}
+      try {
+        localStorage.setItem('lastLoc', JSON.stringify(loc));
+        localStorage.setItem('lastLocTs', String(lastLocTs));
+      } catch (e) {}
     }
-    if (cb) cb(lastLoc);
+    var ws = locWaiters;
+    locWaiters = [];
+    ws.forEach(function (w) { w(lastLoc); });
+    if (loc) onLocationUpdated();
+    if (locForceQueued) {
+      locForceQueued = false;
+      refreshLocation(null, true);
+    }
   }
   setTimeout(function () { finish(null); }, LOC_TIMEOUT + 1000);
   navigator.geolocation.getCurrentPosition(
@@ -155,20 +189,52 @@ function refreshLocation(cb) {
       finish({ lat: pos.coords.latitude, lon: pos.coords.longitude });
     },
     function () { finish(null); },
-    { timeout: LOC_TIMEOUT, maximumAge: 600000 }
+    { timeout: LOC_TIMEOUT, maximumAge: force ? 0 : 60000, enableHighAccuracy: !!force }
   );
 }
 
-// Never block on the GPS when we already know roughly where we are: answer with
-// the cached fix straight away and refresh in the background. Only a completely
-// cold start has to wait, and even then it gives up rather than hanging.
+function locIsFresh() {
+  return !!lastLoc && (Date.now() - lastLocTs) < LOC_FRESH_MS;
+}
+
+// Answer straight away with whatever fix we have and refresh in the background.
+// Only a completely cold start has to wait. Used for the menu, where a wrong
+// guess is corrected as soon as the fresh fix lands (see onLocationUpdated).
 function getLocation(cb) {
-  if (lastLoc) {
-    cb(lastLoc);
-    refreshLocation();
-    return;
-  }
-  refreshLocation(cb);
+  refreshLocation(lastLoc ? null : cb);
+  if (lastLoc) cb(lastLoc);
+}
+
+// Like getLocation, but an old fix is only used once a fresh one has had
+// LOC_WAIT_MS to arrive. Used before building a board, so that opening the app
+// in Oslo doesn't show Ski -> Oslo because the saved fix is from Ski this
+// morning.
+function getTrustedLocation(cb) {
+  if (locIsFresh()) { cb(lastLoc); refreshLocation(); return; }
+  var done = false;
+  function once() { if (!done) { done = true; cb(lastLoc); } }
+  refreshLocation(once);
+  if (lastLoc) setTimeout(once, LOC_WAIT_MS);
+}
+
+function currentDir(index) {
+  return pickDirection(resolved[index], lastLoc).origin.id;
+}
+
+// A new fix may flip the direction of journeys the watch is already showing.
+// Push a corrected menu and board, and re-warm any other board that flipped.
+function onLocationUpdated() {
+  if (!resolved) return;
+  var dirs = resolved.map(function (j, i) { return currentDir(i); });
+  if (sentMenuDirs && sentMenuDirs.join() !== dirs.join()) sendMenu();
+  resolved.forEach(function (j, i) {
+    var c = depCache[i];
+    if (i === openIndex) {
+      if (!c || c.dir !== dirs[i]) sendDepartures(i, true);
+    } else if (c && c.dir !== dirs[i]) {
+      fetchDepartures(i);
+    }
+  });
 }
 
 function quayCode(place) {
@@ -271,6 +337,7 @@ function loadResolved() {
     if (bl) bikeLines = JSON.parse(bl);
     var l = localStorage.getItem('lastLoc');
     if (l) lastLoc = JSON.parse(l);
+    lastLocTs = parseInt(localStorage.getItem('lastLocTs'), 10) || 0;
   } catch (e) { resolved = null; }
 }
 
@@ -335,9 +402,11 @@ function sendError(index, msg) {
 function sendMenu() {
   ensureResolved(function () {
     getLocation(function (loc) {
+      sentMenuDirs = resolved.map(function (j) { return pickDirection(j, loc).origin.id; });
       var rows = resolved.map(function (j) {
         var d = pickDirection(j, loc);
-        var arrow = d.known ? '→ ' : '⇄ ';
+        // The watch font has no two-way arrow, so say it in words.
+        var arrow = d.known ? '→ ' : 'No GPS → ';
         return j.label + '\t' + arrow + shortName(d.dest.name) +
                '\t' + (j.big ? '1' : '0');
       });
@@ -407,6 +476,12 @@ function fetchDepartures(index, onDone) {
 
   graphQL(q, function (data) {
     depInflight[index] = false;
+    // The fix changed while this was in flight: the answer runs the wrong way.
+    // Ask again; the waiters stay queued for the corrected board.
+    if (resolved[index] === j && currentDir(index) !== d.origin.id) {
+      fetchDepartures(index);
+      return;
+    }
     var patterns = (data && data.trip && data.trip.tripPatterns) || [];
     var entry = {
       ts: Date.now(),
@@ -456,25 +531,43 @@ function settleDepartures(index, err, entry) {
 // Answer the watch for one journey. A usable cached board goes out immediately
 // and a refresh is pushed after it; only a cold cache has to wait for the
 // network. The watch replaces the board whenever a newer one arrives.
-function sendDepartures(index) {
+// `fresh` skips the cache (manual refresh, or the direction just changed).
+function sendDepartures(index, fresh) {
+  openIndex = index;
   ensureResolved(function () {
     if (!resolved[index]) { sendError(index, 'No such journey'); return; }
+    getTrustedLocation(function () { sendDeparturesNow(index, fresh); });
+  });
+}
 
-    // A cached board is only reusable if it runs the way we're travelling now —
-    // a background GPS fix may have flipped the direction since it was built.
-    var wantDir = pickDirection(resolved[index], lastLoc).origin.id;
-    var cached = depCache[index];
-    var served = false;
-    if (cached && cached.dir === wantDir &&
+function sendDeparturesNow(index, fresh) {
+  if (!resolved[index]) return;
+  // A cached board is only reusable if it runs the way we're travelling now —
+  // a GPS fix may have flipped the direction since it was built.
+  var wantDir = currentDir(index);
+  var cached = depCache[index];
+  var served = false;
+  if (!fresh && cached && cached.dir === wantDir &&
         (Date.now() - cached.ts) < DEP_SERVE_STALE_MS) {
-      pruneBoard(cached);
-      if (cached.rows.length) { sendBoard(index, cached); served = true; }
-    }
+    pruneBoard(cached);
+    if (cached.rows.length) { sendBoard(index, cached); served = true; }
+  }
 
-    fetchDepartures(index, function (err, entry) {
-      if (err) { if (!served) sendError(index, err); return; }
-      if (entry.rows.length || !served) sendBoard(index, entry);
-    });
+  fetchDepartures(index, function (err, entry) {
+    if (err) { if (!served) sendError(index, err); return; }
+    if (entry.rows.length || !served) sendBoard(index, entry);
+  });
+}
+
+// Long-press SELECT on the watch: get a brand-new fix, then resend the menu and,
+// when a board is open (index >= 0), that board fetched from scratch.
+function manualRefresh(index) {
+  openIndex = index;
+  ensureResolved(function () {
+    refreshLocation(function () {
+      sendMenu();
+      if (index >= 0) sendDeparturesNow(index, true);
+    }, true);
   });
 }
 
@@ -542,6 +635,10 @@ Pebble.addEventListener('appmessage', function (e) {
     sendMenu();
   } else if (p.REQUEST === 2) {
     sendDepartures(p.JOURNEY_INDEX || 0);
+  } else if (p.REQUEST === 3) {
+    manualRefresh('JOURNEY_INDEX' in p ? p.JOURNEY_INDEX : -1);
+  } else if (p.REQUEST === 4) {
+    sendDepartures(p.JOURNEY_INDEX || 0, true);
   }
 });
 

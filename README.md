@@ -59,10 +59,16 @@ Watch (C, MenuLayer)  ⇄  AppMessage  ⇄  Phone (PebbleKit JS)  ⇄  Entur API
 Entur answers a trip query in ~200 ms, so anything slower than that was our own
 doing. Three things keep the board quick:
 
-- **The GPS is never on the critical path.** The last fix is persisted and used
-  immediately; a refresh runs in the background. Deciding which of two stops is
-  nearer tolerates a fix that is minutes old and hundreds of metres off, and
-  waiting for a fresh one used to cost up to 15 s per open.
+- **The GPS is almost never on the critical path.** The last fix is persisted
+  with its timestamp. A fix under 5 minutes old is used straight away and
+  refreshed in the background. An older one is usually from the last time the
+  app was open, perhaps at the other end of the journey, so opening a board then
+  waits at most 3 s for a fresh fix before falling back to it. Waiting for GPS
+  unconditionally used to cost up to 15 s per open.
+- **A new fix corrects what's on screen.** When a fix flips a journey's
+  direction, the menu is sent again and the open board is re-fetched the right
+  way round. A fetch that was in flight when the direction changed is discarded
+  and repeated.
 - **Boards are prefetched at launch.** Phone-side JS only runs while the app is
   in the foreground, so opening the app is exactly the moment to warm every
   journey's board. Departure times are cached as ISO timestamps and re-rendered
@@ -136,8 +142,13 @@ lines suit bikes there.
 | Screen | UP / DOWN | SELECT | BACK |
 |--------|-----------|--------|------|
 | Journeys list | scroll | open board | exit |
-| Departure board | scroll | refresh | back to list |
+| Departure board | scroll | reload departures | back to list |
+
+**Long-press SELECT** on either screen forces a brand-new, high-accuracy GPS fix
+and reloads, with a short vibration to confirm. Use it if the direction is ever
+wrong. The list header shows *Updating…* while it works. With no GPS fix at all,
+the list says `No GPS → Ski` and assumes the direction the journey was entered in.
 
 ## License
 
-MIT
+[The Unlicense](LICENSE). This is public domain, so do whatever you like with it.

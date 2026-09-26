@@ -50,6 +50,14 @@ Unofficial app, not made or endorsed by Entur. Departure data comes from Entur's
 Built for Pebble Time 2.
 ```
 
+## Release notes (1.2.0)
+
+```
+• Direction is now correct when you open the app somewhere new: an old saved location no longer decides it, and the list and board correct themselves as soon as a fresh GPS fix arrives
+• Long-press SELECT to force a fresh GPS fix and reload
+• "No GPS" is shown instead of a broken arrow symbol when there is no fix
+```
+
 ## Release notes (1.1.0)
 
 ```
