@@ -6,7 +6,8 @@ the first time an app is created; the long description, banner and extra
 screenshots go in through the web dashboard. The name, category and icons can be
 changed there later.
 
-**Not published.** Before publishing, work through the checklist at the bottom.
+**Published** 2026-09-26 as v1.1.0: https://apps.rePebble.com/ff1cf685b5ef4dc78a2a840f
+(the banner still needs uploading in the dashboard).
 
 ## App name
 
@@ -78,10 +79,10 @@ entur, train, tog, departures, avganger, ruter, vy, norway, norge, oslo, public 
 | Large icon | `../icon_144x144.png` | 144×144 |
 | Small icon | `../icon_80x80.png` | 80×80 |
 | Marketing banner | `banner_720x320.png` | 720×320 |
-| Screenshot 1: journeys | `screenshots/emery-1-journeys.png` | 200×228 |
-| Screenshot 2: departure board with bikes | `screenshots/emery-2-board.png` | 200×228 |
-| Screenshot 3: big-text board | `screenshots/emery-3-big-text.png` | 200×228 |
-| Screenshot 4: another journey | `screenshots/emery-4-auto-direction.png` | 200×228 |
+| Screenshot 1: journeys | `screenshots/emery_1-journeys.png` | 200×228 |
+| Screenshot 2: departure board with bikes | `screenshots/emery_2-board.png` | 200×228 |
+| Screenshot 3: big-text board | `screenshots/emery_3-big-text.png` | 200×228 |
+| Screenshot 4: another journey | `screenshots/emery_4-auto-direction.png` | 200×228 |
 
 `python3 store/make_assets.py` regenerates the icons and banner. The banner
 uses screenshots 2 and 3.
@@ -101,12 +102,11 @@ pebble screenshot --no-open --emulator emery store/screenshots/<name>.png
 
 ```
 pebble login
-pebble publish --screenshots store/screenshots/*.png \
-  --icon-small icon_80x80.png --icon-large icon_144x144.png
+pebble publish --non-interactive --is-published --no-gif-all-platforms \
+  --release-notes "..." --screenshots store/screenshots/emery_*.png
 ```
 
-Leave out `--is-published` for the first upload. The release then stays hidden
-until you publish it from the dashboard.
+Screenshot filenames must start with `<platform>_`; the tool reads the platform from that prefix.
 
 ## Checklist before publishing
 
@@ -121,5 +121,5 @@ until you publish it from the dashboard.
 - [ ] Consider changing `author` in `package.json` (currently "Peter"). It is
       shown as the developer name.
 - [ ] Test the Clay settings page on a real phone.
-- [ ] Upgrade pebble-tool (`uv tool upgrade pebble-tool`). 5.0.16 has no
+- [x] Upgrade pebble-tool (`uv tool upgrade pebble-tool`). 5.0.16 has no
       `publish` command.

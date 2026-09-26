@@ -96,8 +96,8 @@ def banner():
     d.text((38, 244), "Your trains, the right way round.", font=font("Medium", 17), fill=GREY)
     d.text((38, 272), "Live Norwegian public transport", font=font("Regular", 14), fill=GREY)
 
-    back = watch(os.path.join(HERE, "screenshots", "emery-3-big-text.png"))
-    front = watch(os.path.join(HERE, "screenshots", "emery-2-board.png"))
+    back = watch(os.path.join(HERE, "screenshots", "emery_3-big-text.png"))
+    front = watch(os.path.join(HERE, "screenshots", "emery_2-board.png"))
     drop_shadow(img, back, (478, 20))
     drop_shadow(img, front, (348, 48))
     return img.convert("RGB")
