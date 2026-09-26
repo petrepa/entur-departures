@@ -28,16 +28,25 @@ var DEFAULT_CLIENT = 'peter-pebble-departures';
 
 // Seed journey (used until the user configures their own in phone settings).
 var DEFAULT_JOURNEYS = [
-  { label: 'Oslo–Ski', from: 'Oslo S', to: 'Ski', big: false }
+  { label: 'Oslo–Ski', from: 'Oslo S', to: 'Ski', big: false, bike: false }
 ];
+
+// Trains that are easy to roll a bike on and off. Entur does not expose rolling
+// stock, so this is keyed on line code (or train number, for one-off sets). On
+// Oslo–Ski, R21/R22/R23 run Type 75 Flirts: step-free doors, open multi-purpose
+// area. RE20 is mostly Type 74 (also step-free), but rush-hour extras can be
+// Type 73 with steps and a narrow bike room, so it is not marked by default.
+var DEFAULT_BIKE_LINES = 'R21, R22, R23';
 
 var etClientName = DEFAULT_CLIENT;
 var numDepartures = 5;
+var bikeLines = parseBikeLines(DEFAULT_BIKE_LINES);
 
 // Resolved journeys:
-//   [{ label, big, a:{id,name,lat,lon}, b:{id,name,lat,lon} }]
+//   [{ label, big, bike, a:{id,name,lat,lon}, b:{id,name,lat,lon} }]
 // `big` asks the watch for the large, glanceable board — readable while cycling,
-// at the cost of fitting fewer departures on screen.
+// at the cost of fitting fewer departures on screen. `bike` marks departures on
+// bike-friendly trains with a bike symbol.
 var resolved = null;
 
 // Cached GPS fix. Persisted, because deciding which of two stops is nearer
@@ -50,10 +59,24 @@ var locPending = false;
 
 // Departure boards, keyed by journey index, kept as raw times so a cached entry
 // can be re-rendered with correct "x min" countdowns instead of going stale.
-var depCache = {};      // index -> { ts, dir, header, rows: [{iso, code, track}] }
+var depCache = {};      // index -> { ts, dir, header, rows: [{iso, code, train, track}] }
 var depInflight = {};   // index -> true while a fetch is running
 var depWaiters = {};    // index -> [cb] waiting on the in-flight fetch
 var DEP_SERVE_STALE_MS = 180000;
+
+// "R21, r22 ,107" -> { R21: true, R22: true, '107': true }
+function parseBikeLines(text) {
+  var set = {};
+  ('' + (text || '')).split(/[\s,;]+/).forEach(function (t) {
+    if (t) set[t.toUpperCase()] = true;
+  });
+  return set;
+}
+
+function isBikeFriendly(row) {
+  return !!((row.code && bikeLines[row.code.toUpperCase()]) ||
+            (row.train && bikeLines[row.train]));
+}
 
 // ---------------------------------------------------------------------------
 // HTTP helpers (always send ET-Client-Name)
@@ -212,6 +235,7 @@ function resolveJourneys(raw, done) {
         out.push({
           label: j.label || (a.name + '–' + b.name),
           big: !!j.big,
+          bike: !!j.bike,
           a: a,
           b: b
         });
@@ -231,6 +255,7 @@ function saveResolved() {
     localStorage.setItem('resolved', JSON.stringify(resolved));
     localStorage.setItem('etClientName', etClientName);
     localStorage.setItem('numDepartures', String(numDepartures));
+    localStorage.setItem('bikeLines', JSON.stringify(bikeLines));
   } catch (e) { /* ignore quota errors */ }
 }
 
@@ -242,6 +267,8 @@ function loadResolved() {
     if (c) etClientName = c;
     var n = localStorage.getItem('numDepartures');
     if (n) numDepartures = parseInt(n, 10) || 5;
+    var bl = localStorage.getItem('bikeLines');
+    if (bl) bikeLines = JSON.parse(bl);
     var l = localStorage.getItem('lastLoc');
     if (l) lastLoc = JSON.parse(l);
   } catch (e) { resolved = null; }
@@ -328,11 +355,11 @@ function sendMenu() {
 // only progressively less complete as new departures appear.
 var MAX_PAYLOAD = 460;   // stays under the watch's negotiated inbox buffer
 
-function renderBoard(entry) {
+function renderBoard(entry, bike) {
   var lines = [entry.header];
   entry.rows.forEach(function (r) {
     lines.push(isoLocalHHMM(r.iso) + '\t' + r.code + '\t' + etaText(r.iso) +
-               '\t' + r.track);
+               '\t' + r.track + '\t' + (bike && isBikeFriendly(r) ? '1' : '0'));
   });
   // Drop from the end rather than risk an oversized message being dropped
   // whole — a silently lost payload is indistinguishable from a hang.
@@ -354,7 +381,7 @@ function sendBoard(index, entry) {
   sendToWatch({
     MSG_TYPE: 1,
     JOURNEY_INDEX: index,
-    PAYLOAD: renderBoard(entry)
+    PAYLOAD: renderBoard(entry, resolved && resolved[index] && resolved[index].bike)
   });
 }
 
@@ -375,6 +402,7 @@ function fetchDepartures(index, onDone) {
     '{trip(from:{place:"' + d.origin.id + '"} to:{place:"' + d.dest.id +
     '"} numTripPatterns:' + numDepartures + '){tripPatterns{' +
     'expectedStartTime legs{mode expectedStartTime line{publicCode} ' +
+    'serviceJourney{privateCode} ' +
     'fromPlace{quay{publicCode}} toPlace{quay{publicCode}}}}}}';
 
   graphQL(q, function (data) {
@@ -406,6 +434,7 @@ function fetchDepartures(index, onDone) {
       entry.rows.push({
         iso: (leg && leg.expectedStartTime) || p.expectedStartTime,
         code: (leg && leg.line && leg.line.publicCode) || '',
+        train: (leg && leg.serviceJourney && leg.serviceJourney.privateCode) || '',
         track: track
       });
     });
@@ -479,6 +508,8 @@ function applySettings(settings) {
   if (client) etClientName = client;
   var n = parseInt(val(settings, 'NUM_DEPARTURES'), 10);
   if (n >= 2 && n <= 10) numDepartures = n;
+  // Present-but-empty clears the list; absent (older saved settings) keeps it.
+  if (settings.BIKE_LINES != null) bikeLines = parseBikeLines(val(settings, 'BIKE_LINES'));
 
   var raw = [];
   for (var i = 1; i <= 4; i++) {
@@ -486,7 +517,8 @@ function applySettings(settings) {
       label: val(settings, 'J' + i + '_LABEL'),
       from:  val(settings, 'J' + i + '_FROM'),
       to:    val(settings, 'J' + i + '_TO'),
-      big:   boolVal(settings, 'J' + i + '_BIG')
+      big:   boolVal(settings, 'J' + i + '_BIG'),
+      bike:  boolVal(settings, 'J' + i + '_BIKE')
     });
   }
   return raw;

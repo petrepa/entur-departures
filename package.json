@@ -1,7 +1,7 @@
 {
   "name": "entur-departures",
   "author": "Peter",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "keywords": [
     "pebble-app"
   ],
@@ -42,22 +42,27 @@
       "REQUEST",
       "ET_CLIENT_NAME",
       "NUM_DEPARTURES",
+      "BIKE_LINES",
       "J1_LABEL",
       "J1_FROM",
       "J1_TO",
       "J1_BIG",
+      "J1_BIKE",
       "J2_LABEL",
       "J2_FROM",
       "J2_TO",
       "J2_BIG",
+      "J2_BIKE",
       "J3_LABEL",
       "J3_FROM",
       "J3_TO",
       "J3_BIG",
+      "J3_BIKE",
       "J4_LABEL",
       "J4_FROM",
       "J4_TO",
-      "J4_BIG"
+      "J4_BIG",
+      "J4_BIKE"
     ]
   }
 }

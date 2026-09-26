@@ -25,6 +25,10 @@ Built for **Pebble Time 2 (emery)**.
   bold underneath, clock and line code small below. About two departures fit on
   screen instead of three. Set it on the journeys you ride a bike to and leave it
   off for the ones where you can stop and read properly.
+- **Bike-friendly trains, per journey** — a second toggle puts a bike symbol
+  on departures that are easy to roll a bike on and off: step-free doors and an
+  open multi-purpose area rather than steps and a cramped vestibule. See
+  [Bike-friendly trains](#bike-friendly-trains).
 - **Phone-configurable** via a Clay settings page — no rebuild to change journeys.
 
 ## How it works
@@ -47,7 +51,8 @@ Watch (C, MenuLayer)  ⇄  AppMessage  ⇄  Phone (PebbleKit JS)  ⇄  Entur API
   `NSR:StopPlace` ids (cached in `localStorage`), gets GPS, picks direction by
   haversine distance, and queries the Entur JourneyPlanner v3 `trip` endpoint.
 - **`src/pkjs/config.js`** — the Clay configuration page (4 journey slots each
-  with a big-text toggle, departures-to-show, Entur client name).
+  with big-text and bike toggles, the bike-friendly train list,
+  departures-to-show, Entur client name).
 
 ### Staying fast
 
@@ -99,7 +104,32 @@ up to four journeys. Type a stop **name** (e.g. `Oslo S`, `Nydalen`) — it's
 geocoded on save — or paste an exact `NSR:StopPlace:XXXXX` id if a name is
 ambiguous. Ships with a default **Oslo–Ski** journey so it works out of the box.
 
-Each journey has its own **Big text** toggle for the glanceable board.
+Each journey has its own **Big text** toggle for the glanceable board and its
+own **Mark bike-friendly trains** toggle.
+
+## Bike-friendly trains
+
+![bike symbols](docs/screenshot-bike.png) ![bike symbols, big text](docs/screenshot-bike-big.png)
+
+Entur's journey planner has no rolling-stock data (`bikesAllowed` is
+`noInformation` for every Vy departure), so "bike-friendly" is a list you
+control in settings: line codes and/or train numbers, comma separated. A
+departure is marked when its line code (`R21`) or train number (`1107`) is in the
+list.
+
+The default, **`R21, R22, R23`**, is chosen for Oslo S ↔ Ski:
+
+| Line | Route | Usual train | Bikes |
+|------|-------|-------------|-------|
+| R21 | Stabekk–Oslo S–Moss | Type 75 (Stadler Flirt) | Step-free doors, multi-purpose area — easy |
+| R22 | Skøyen–Oslo S–Mysen/Rakkestad | Type 75 | Easy |
+| R23 | Stabekk–Oslo S–Ski(–Moss) | Type 75 | Easy |
+| RE20 | Oslo S–Halden–Göteborg | Type 74 (Flirt), rush-hour extras Type 73B | Usually step-free, but a 73B has steps and a small bike room behind the cab; Vy recommends reserving a bike space |
+
+RE20 is left out because a given departure could be either. If you learn which
+RE20 train numbers reliably run Type 74, add them by number (e.g. `R21, R22,
+R23, 105, 107`). The same list works for any other journey — put in whichever
+lines suit bikes there.
 
 ## Navigation
 
