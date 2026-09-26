@@ -16,7 +16,9 @@
  *   0 = menu       : PAYLOAD = journeys, one per line "label\tdirection\tbig"
  *                    big = "1" when that journey should use the large,
  *                    glanceable departure board (readable while cycling).
- *   1 = departures : JOURNEY_INDEX + PAYLOAD = "header\nHH:MM\tLINE\tETA\tTRACK\n..."
+ *   1 = departures : JOURNEY_INDEX + PAYLOAD = "header\nHH:MM\tLINE\tETA\tTRACK\tBIKE\n..."
+ *                    BIKE = "1" when the train is easy to take a bike on
+ *                    (step-free, roomy entrance) — drawn as a bike symbol.
  *   2 = error      : JOURNEY_INDEX + PAYLOAD = message
  * Protocol (watch -> phone), keyed by REQUEST:
  *   1 = send menu
@@ -85,6 +87,7 @@ static char s_dep_eta[MAX_DEPARTURES][ETA_LEN];                 // "6 min"
 static char s_dep_track[MAX_DEPARTURES][TRACK_LEN];             // "Spor 3 > 18"
 static char s_dep_row[MAX_DEPARTURES][TIME_LEN + LINE_LEN + 4]; // "HH:MM  R11"
 static char s_dep_sub[MAX_DEPARTURES][SUB_LEN];                 // "6 min · Spor 3"
+static bool s_dep_bike[MAX_DEPARTURES];                         // bike-friendly train
 static int  s_dep_count = 0;
 static char s_dep_header[HEADER_LEN];
 static char s_dep_error[ERR_LEN];
@@ -168,10 +171,10 @@ static void parse_departures(const char *payload) {
         nl = strchr(p, '\n');
         int line_len = nl ? (int)(nl - p) : (int)strlen(p);
 
-        // Split the row into up to 4 tab-separated fields:
-        //   time \t line \t eta \t track
-        const char *fs[4]; int fl[4];
-        int nf = split_fields(p, line_len, fs, fl, 4);
+        // Split the row into up to 5 tab-separated fields:
+        //   time \t line \t eta \t track \t bike
+        const char *fs[5]; int fl[5];
+        int nf = split_fields(p, line_len, fs, fl, 5);
 
         int i = s_dep_count;
         copy_field(s_dep_time[i], TIME_LEN, fs[0], fl[0]);
@@ -181,6 +184,7 @@ static void parse_departures(const char *payload) {
         if (nf > 1) copy_field(s_dep_line[i],  LINE_LEN,  fs[1], fl[1]);
         if (nf > 2) copy_field(s_dep_eta[i],   ETA_LEN,   fs[2], fl[2]);
         if (nf > 3) copy_field(s_dep_track[i], TRACK_LEN, fs[3], fl[3]);
+        s_dep_bike[i] = (nf > 4 && fl[4] > 0 && fs[4][0] == '1');
 
         // Precompute title + subtitle so the draw callback stays cheap.
         if (s_dep_line[i][0]) {
@@ -329,18 +333,57 @@ static int16_t detail_cell_height(MenuLayer *menu, MenuIndex *cell_index, void *
     return BIG_CELL_H;
 }
 
+// A bicycle drawn with primitives so it follows the cell's text colour
+// (inverted when the row is highlighted). `half` is the scale in halves: 2 draws
+// it BIKE_W x BIKE_H, 3 draws it half as large again for the big board.
+#define BIKE_W 26
+#define BIKE_H 16
+#define BIKE_PT(o, px, py, half) GPoint((o).x + (px) * (half) / 2, (o).y + (py) * (half) / 2)
+
+static void draw_bike(GContext *ctx, GPoint o, int half, GColor color) {
+    GPoint rear  = BIKE_PT(o, 6,  10, half);
+    GPoint front = BIKE_PT(o, 20, 10, half);
+    GPoint crank = BIKE_PT(o, 12, 10, half);
+    GPoint seat  = BIKE_PT(o, 10, 4,  half);
+    GPoint head  = BIKE_PT(o, 18, 4,  half);
+    int r = 5 * half / 2;
+
+    graphics_context_set_stroke_color(ctx, color);
+    graphics_context_set_stroke_width(ctx, half >= 3 ? 3 : 2);
+    graphics_draw_circle(ctx, rear, r);
+    graphics_draw_circle(ctx, front, r);
+    graphics_draw_line(ctx, rear, crank);
+    graphics_draw_line(ctx, rear, seat);
+    graphics_draw_line(ctx, seat, crank);
+    graphics_draw_line(ctx, seat, head);
+    graphics_draw_line(ctx, crank, head);
+    graphics_draw_line(ctx, head, front);
+    graphics_draw_line(ctx, BIKE_PT(o, 8, 1, half), BIKE_PT(o, 12, 1, half));
+    graphics_draw_line(ctx, head, BIKE_PT(o, 21, 1, half));
+    graphics_context_set_stroke_width(ctx, 1);
+}
+
+static GColor cell_text_color(const Layer *cell) {
+    return menu_cell_layer_is_highlighted(cell) ? GColorWhite : GColorBlack;
+}
+
 // Large layout: the countdown fills the row, the track sits under it in bold,
 // and the clock time + line code drop to a small third line. Everything you
 // need to decide at a glance is in the top two lines.
 static void detail_draw_big_row(GContext *ctx, const Layer *cell, int i) {
     GRect b = layer_get_bounds(cell);
-    graphics_context_set_text_color(ctx,
-        menu_cell_layer_is_highlighted(cell) ? GColorWhite : GColorBlack);
+    GColor fg = cell_text_color(cell);
+    graphics_context_set_text_color(ctx, fg);
 
+    // Leave the countdown's right edge for the bike so they never collide.
+    int eta_w = b.size.w - 8 - (s_dep_bike[i] ? BIKE_W * 3 / 2 + 4 : 0);
     graphics_draw_text(ctx, s_dep_eta[i],
         fonts_get_system_font(FONT_KEY_BITHAM_42_BOLD),
-        GRect(4, b.origin.y - 8, b.size.w - 8, 46),
+        GRect(4, b.origin.y - 8, eta_w, 46),
         GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    if (s_dep_bike[i]) {
+        draw_bike(ctx, GPoint(b.size.w - BIKE_W * 3 / 2 - 6, b.origin.y + 8), 3, fg);
+    }
 
     graphics_draw_text(ctx, s_dep_track[i],
         fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD),
@@ -390,6 +433,11 @@ static void detail_draw_row(GContext *ctx, const Layer *cell,
         return;
     }
     menu_cell_basic_draw(ctx, cell, s_dep_row[i], s_dep_sub[i], NULL);
+    if (s_dep_bike[i]) {
+        GRect b = layer_get_bounds(cell);
+        draw_bike(ctx, GPoint(b.size.w - BIKE_W - 6, b.origin.y + 8), 2,
+                  cell_text_color(cell));
+    }
 }
 
 static void detail_select(MenuLayer *menu, MenuIndex *cell_index, void *ctx) {
